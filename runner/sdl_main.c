@@ -29,6 +29,14 @@
 #include "launcher.h"
 #include "snes/snes.h"
 
+#ifdef __SWITCH__
+/* Switch platform bring-up + SD ROM resolver (framework) and the raw
+ * joystick gamepad path (this directory). recomp-ui, the overlay, and
+ * the desktop GL presenter are compiled out of Switch builds. */
+#include "switch_gamepad.h"
+#include "switch_impl.h"
+#endif
+
 #include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -179,9 +187,17 @@ static void CloseControllers(SdlHost *host) {
     if (host->controllers[i]) SDL_GameControllerClose(host->controllers[i]);
     host->controllers[i] = NULL;
   }
+#ifdef __SWITCH__
+  Dkc2SwitchClosePads();
+#endif
 }
 
 static void RefreshControllers(SdlHost *host) {
+#ifdef __SWITCH__
+  /* Raw joystick path: no SDL_GameController mapping database needed. */
+  (void)host;
+  Dkc2SwitchRefreshPads();
+#else
   CloseControllers(host);
   int opened = 0;
   for (int device = 0;
@@ -191,6 +207,7 @@ static void RefreshControllers(SdlHost *host) {
     SDL_GameController *controller = SDL_GameControllerOpen(device);
     if (controller) host->controllers[opened++] = controller;
   }
+#endif
 }
 
 static void PumpEvents(SdlHost *host) {
@@ -210,12 +227,19 @@ static void PumpEvents(SdlHost *host) {
         Dkc2DesktopOverlayProcessSdlEvent(host->overlay, &event);
     if (consumed) continue;
     if (event.type == SDL_QUIT) host->running = false;
+#ifdef __SWITCH__
+    if (event.type == SDL_JOYDEVICEADDED ||
+        event.type == SDL_JOYDEVICEREMOVED)
+      RefreshControllers(host);
+#else
     if (event.type == SDL_CONTROLLERDEVICEADDED ||
         event.type == SDL_CONTROLLERDEVICEREMOVED)
       RefreshControllers(host);
+#endif
   }
 }
 
+#ifndef __SWITCH__
 static uint32_t ReadGamepadButtons(SDL_GameController *controller) {
   uint32_t buttons = 0;
 #define MAP_SDL_BUTTON(sdl_button, dkc2_button)                            \
@@ -243,13 +267,16 @@ static uint32_t ReadGamepadButtons(SDL_GameController *controller) {
 #undef MAP_SDL_BUTTON
   return buttons;
 }
+#endif
 
+#ifndef __SWITCH__
 static uint8_t ReadTrigger(SDL_GameController *controller,
                            SDL_GameControllerAxis axis) {
   Sint16 value = SDL_GameControllerGetAxis(controller, axis);
   if (value <= 0) return 0;
   return (uint8_t)(((uint32_t)(uint16_t)value * 255u) / 32767u);
 }
+#endif
 
 static bool IsSdlScancodePressed(int scancode, void *context) {
   const Uint8 *keys = (const Uint8 *)context;
@@ -259,9 +286,14 @@ static bool IsSdlScancodePressed(int scancode, void *context) {
 
 static SdlControls ReadControls(SdlHost *host) {
   SdlControls controls = {0, 0};
+#ifdef __SWITCH__
+  /* The Switch window never loses input focus meaningfully; SDL may also
+   * report no focus flags in applet mode, which must not mute controls. */
+#else
   SDL_Window *window = (SDL_Window *)host->presenter.window;
   if (!host->hidden && !(SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS))
     return controls;
+#endif
   const Uint8 *keys = SDL_GetKeyboardState(NULL);
   uint32_t keyboard[kDkc2DesktopPlayerCount];
   for (int player = 0; player < kDkc2DesktopPlayerCount; player++)
@@ -270,6 +302,12 @@ static SdlControls ReadControls(SdlHost *host) {
 
   Dkc2GamepadState gamepads[kMaximumControllers];
   size_t gamepad_count = 0;
+#ifdef __SWITCH__
+  /* Player 1 autodetects the first attached pad (player_src forced to
+   * gamepad in main); sticks + ZL/ZR triggers are decoded in
+   * switch_gamepad.c. */
+  gamepad_count = Dkc2SwitchReadPads(gamepads, kMaximumControllers);
+#else
   for (int i = 0; i < kMaximumControllers; i++) {
     SDL_GameController *controller = host->controllers[i];
     if (!controller || !SDL_GameControllerGetAttached(controller)) continue;
@@ -291,6 +329,7 @@ static SdlControls ReadControls(SdlHost *host) {
     gamepad->right_trigger = ReadTrigger(
         controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
   }
+#endif
   controls.controller = Dkc2RoutePlayerInputsWithBindings(
       keyboard, gamepads, gamepad_count, host->player_source,
       host->player_deadzone, host->player_pad_bind);
@@ -687,7 +726,14 @@ static int RunGame(const char *rom_path,
     ShowError("Unable to initialize the selected screen-color filter");
     return 4;
   }
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER |
+  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO |
+#ifdef __SWITCH__
+               /* Raw SDL_Joystick path; the GameController mapping database
+                * is not needed (or trusted) in applet mode. */
+               SDL_INIT_JOYSTICK |
+#else
+               SDL_INIT_GAMECONTROLLER |
+#endif
                SDL_INIT_TIMER) != 0) {
     free(rom);
     Dkc2DesktopColorFilterDestroy(&host.color_filter);
@@ -894,6 +940,11 @@ static int RunGame(const char *rom_path,
   }
 
   while (host.running) {
+#ifdef __SWITCH__
+    /* Home-button / suspend pump; libnx kills titles that starve
+     * appletMainLoop. An applet exit request also arrives as SDL_QUIT. */
+    if (!SwitchImpl_Tick()) break;
+#endif
 #ifdef __APPLE__
     const double stage_top = Dkc2MacHostSeconds();
 #endif
@@ -1335,6 +1386,11 @@ static int RunGame(const char *rom_path,
 
 int main(int argc, char **argv) {
   SDL_SetMainReady();
+#ifdef __SWITCH__
+  /* Seamless handheld boot: SD app dir becomes cwd, ROM comes straight
+   * from sdmc:/switch/dkc2/rom.smc, no launcher, P1 on the first pad. */
+  SwitchImpl_Init();
+#endif
   bool force_launcher = false;
   int rom_argument = 1;
   if (argc >= 2 && strcmp(argv[1], "--launcher") == 0) {
@@ -1369,6 +1425,60 @@ int main(int argc, char **argv) {
   RecompLauncherCSettings settings;
   Dkc2LauncherSettingsDefault(&settings);
   Dkc2LauncherSettingsLoad(&settings);
+#ifdef __SWITCH__
+  {
+    (void)rom_path;
+    (void)force_launcher;
+    /* Forced handheld profile (re-applied every boot, ahead of any
+     * launcher.cfg): player 1 autodetects the first pad, player 2 is
+     * off, and the pad layout is the fixed Switch mapping -- ABXY at
+     * their physical SNES positions, ZL/ZR as L/R triggers, Plus as
+     * Start, Minus as Select. Assist pad/key shortcuts are cleared so
+     * ZL/ZR never double as rewind/fast-forward. */
+    static const int kSwitchPadBind[12] = {
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_DPAD_UP),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_DPAD_DOWN),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_DPAD_LEFT),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_DPAD_RIGHT),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_A),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_B),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_X),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_Y),
+        RECOMP_LAUNCHER_PAD_AXIS(SDL_CONTROLLER_AXIS_TRIGGERLEFT, 1),
+        RECOMP_LAUNCHER_PAD_AXIS(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 1),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_START),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_BACK),
+    };
+    settings.player_src[0] = 2;
+    settings.player_src[1] = 0;
+    settings.skip_launcher = 1;
+    /* 16:9 widescreen out of the box on the handheld/big screen. */
+    settings.aspect_index = kDkc2VideoAspect16x9;
+    settings.widescreen = 1;
+    /* Applied once here at boot, never re-derived per frame: the video
+     * layer is already forced wide (Dkc2VideoIsWidescreen), so this only
+     * establishes the geometry (g_ws_extra, presenter width) before the
+     * first frame. RunGame re-applies the same value as a no-op. */
+    Dkc2VideoSetAspect(kDkc2VideoAspect16x9);
+    for (int player = 0; player < kDkc2DesktopPlayerCount; player++)
+      memcpy(settings.player_pad_bind[player], kSwitchPadBind,
+             sizeof kSwitchPadBind);
+    memset(settings.assist_pad_bind, 0, sizeof settings.assist_pad_bind);
+    memset(settings.assist_key_bind, 0, sizeof settings.assist_key_bind);
+    char switch_rom[kPathCapacity] = {0};
+    const char *positional =
+        (argc == rom_argument + 1) ? argv[rom_argument] : NULL;
+    if (!SwitchImpl_ResolveRom(switch_rom, sizeof switch_rom, positional)) {
+      ShowError("No ROM found. Copy rom.smc to sdmc:/switch/dkc2/.");
+      ThrowMissingROM();
+      return 2;
+    }
+    int switch_result = RunGame(switch_rom, &settings);
+    (void)Dkc2LauncherSettingsSave(&settings);
+    SwitchImpl_Exit();
+    return switch_result;
+  }
+#else
   if (!rom_path[0])
     (void)Dkc2LauncherReadRomCache(rom_path, sizeof rom_path);
   bool suppress_launcher = EnvironmentEnabled("SNESRECOMP_NO_LAUNCHER") ||
@@ -1392,4 +1502,5 @@ int main(int argc, char **argv) {
   int result = RunGame(rom_path, &settings);
   (void)Dkc2LauncherSettingsSave(&settings);
   return result;
+#endif
 }

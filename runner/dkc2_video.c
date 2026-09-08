@@ -120,7 +120,16 @@ void Dkc2VideoSetWidescreen(bool enabled) {
 }
 
 bool Dkc2VideoIsWidescreen(void) {
+#ifdef __SWITCH__
+  /* Handheld build: widescreen is forced on regardless of config. This
+   * only answers the enable question; per-scene gating (bounded title /
+   * menu screens still center instead of stretching) lives in the
+   * per-frame policy in Dkc2DrawPpuFrame, which must keep following live
+   * camera, HDMA-band, and layout state every frame. */
+  return true;
+#else
   return g_ws_active;
+#endif
 }
 
 void Dkc2VideoSetTerrainReady(bool ready) {

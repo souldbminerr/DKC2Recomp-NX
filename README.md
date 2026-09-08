@@ -1,3 +1,11 @@
+
+# AI Usage Disclosure from Soul
+Yes, I used AI.
+No, I don't care about your opinion
+This was to simply port a game I love to Switch without spending a week.
+
+Another quick note: you will have to change submodule of upsteam snesrecomp to my fork
+
 # DKC2Recomp
 > This recompilation is a byproduct of developing
 > [snesrecomp](https://github.com/mstan/snesrecomp): the games are the proving

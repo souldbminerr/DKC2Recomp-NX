@@ -26,6 +26,11 @@ __pycache__/
 
 *.exe
 *.dll
+*.nro
+*.nacp
+*.nso
+*.elf
+*.lst
 *.pdb
 *.obj
 *.ilk
