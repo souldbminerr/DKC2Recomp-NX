@@ -721,6 +721,20 @@ static int RunGame(const char *rom_path,
     if (EnsureSaveDirectory()) RtlReadSram();
     else sram_enabled = false;
   }
+#ifdef __SWITCH__
+  /* Seed an empty save when none exists: proves the path is writable
+   * while the log is watching, and later writes can never fail on a
+   * missing file. g_sram still holds the loaded (or zeroed) image. */
+  if (sram_enabled) {
+    char sram_path[128];
+    RtlSramFilePath(sram_path, sizeof sram_path);
+    FILE *probe = fopen(sram_path, "rb");
+    if (probe)
+      fclose(probe);
+    else
+      RtlWriteSram();
+  }
+#endif
   if (!Dkc2DesktopColorFilterInit(&host.color_filter, screen_filter)) {
     free(rom);
     ShowError("Unable to initialize the selected screen-color filter");
@@ -1035,6 +1049,30 @@ static int RunGame(const char *rom_path,
 #endif
     controls.host_actions = Dkc2ApplyAssistGate(
         controls.host_actions, platform_host_actions, assist_tools);
+#ifdef SWITCH_DEBUG
+    /* Debug-only (make DEBUG=1): L3 = quick-save, R3 = quick-load, slot
+     * 0. Applied AFTER the assist gate, which strips state actions while
+     * assist tools are off -- and the overlay that enables them is
+     * stubbed on Switch. Edge-triggered so a held click fires once. */
+    {
+      Dkc2GamepadState dbg_pad;
+      if (Dkc2SwitchReadPads(&dbg_pad, 1) > 0) {
+        static uint32_t s_prev_stick_click;
+        uint32_t cur = dbg_pad.buttons &
+            (kDkc2GamepadLeftStick | kDkc2GamepadRightStick);
+        uint32_t pressed = cur & ~s_prev_stick_click;
+        s_prev_stick_click = cur;
+        if (pressed & kDkc2GamepadLeftStick) {
+          controls.host_actions |= kDkc2HostSaveState;
+          fprintf(stderr, "[SwitchDbg] quick-save slot 0\n");
+        }
+        if (pressed & kDkc2GamepadRightStick) {
+          controls.host_actions |= kDkc2HostLoadState;
+          fprintf(stderr, "[SwitchDbg] quick-load slot 0\n");
+        }
+      }
+    }
+#endif
     uint32_t state_actions = controls.host_actions &
         (kDkc2HostSaveState | kDkc2HostLoadState);
     uint32_t pressed_state_actions = state_actions & ~previous_state_actions;
@@ -1199,6 +1237,15 @@ static int RunGame(const char *rom_path,
           host_frame - iteration_start == kHostSpeedMultiplier)
         test_fast_forward_completed = true;
     }
+#ifdef __SWITCH__
+    /* Persist SRAM every ~30 s of emulation so progress survives an
+     * unclean exit (killed title, crash, dead battery); a libnx exit
+     * hook (SwitchImpl, framework) covers the clean-quit path. Between
+     * emulated frames the SRAM image is stable, and 2 KiB + rename is
+     * cheap. */
+    if (sram_enabled && host_frame != 0 && (host_frame % 1800) == 0)
+      RtlWriteSram();
+#endif
 
     /* Until the queue is primed the loop runs unpaced to fill it to the
      * rate-control target; once primed, rate control holds the fill there
@@ -1430,8 +1477,9 @@ int main(int argc, char **argv) {
     (void)rom_path;
     (void)force_launcher;
     /* Forced handheld profile (re-applied every boot, ahead of any
-     * launcher.cfg): player 1 autodetects the first pad, player 2 is
-     * off, and the pad layout is the fixed Switch mapping -- ABXY at
+     * launcher.cfg): players 1 and 2 autodetect pads in order (a lone
+     * pad drives player 1; a missing player-2 pad reads zeros until one
+     * is connected), and the pad layout is the fixed Switch mapping -- ABXY at
      * their physical SNES positions, ZL/ZR as L/R triggers, Plus as
      * Start, Minus as Select. Assist pad/key shortcuts are cleared so
      * ZL/ZR never double as rewind/fast-forward. */
@@ -1450,7 +1498,7 @@ int main(int argc, char **argv) {
         RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_BACK),
     };
     settings.player_src[0] = 2;
-    settings.player_src[1] = 0;
+    settings.player_src[1] = 2;
     settings.skip_launcher = 1;
     /* 16:9 widescreen out of the box on the handheld/big screen. */
     settings.aspect_index = kDkc2VideoAspect16x9;

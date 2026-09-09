@@ -100,6 +100,12 @@ GAME_DEFS := \
 	-DDKC2_REAL_HOST_REPORT=1 \
 	-DSWITCH_APP_DIR='"$(SWITCH_APP_DIR)"'
 
+# Debug-only Switch extras: make -f Makefile.switch DEBUG=1
+# (L3 = quick-save to slot 0, R3 = quick-load). Off by default.
+ifdef DEBUG
+GAME_DEFS += -DSWITCH_DEBUG
+endif
+
 DATA		:=
 ROMFS		:=
 APP_ICON	:=	$(TOPDIR)/assets/switch/icon.jpg

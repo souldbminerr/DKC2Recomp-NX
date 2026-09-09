@@ -30,6 +30,9 @@ else compiles and links. That is the expected no-ROM state.
 - First boot writes `config.ini`/`launcher.cfg` defaults; `saves/` holds
   SRAM and savestates. A missing ROM writes `MISSING_ROM.txt` next to
   the NRO instead of showing a picker.
+- SRAM safety net: an empty `saves/save.srm` is seeded at boot when none
+  exists; a libnx exit-request hook persists SRAM the moment the OS asks
+  us to quit; and a ~30 s re-persist covers unclean exits.
 - Debugging without nxlink: create an empty `sdmc:/switch/dkc2/log.flag`
   and stderr (breadcrumbs, warnings, fatals) is redirected, unbuffered,
   to `sdmc:/switch/dkc2/debug.log`, truncated each boot. Delete the flag
@@ -46,6 +49,15 @@ Player 1 autodetects the first attached controller; player 2 is off.
 | Plus (+) | Start |
 | Minus (−) | Select |
 | DPad, left stick | DPad |
+| L3 / R3 (`DEBUG=1` builds only) | Quick-save / quick-load slot 0 |
+
+A connected second controller drives player 2 automatically (pads are
+assigned in order). When WRAM $060D reports 2-player mode (1 = team,
+2 = contest, per the input router) while fewer than 2 pads are attached,
+the native controller-support applet opens once per boot so a 2nd pad
+can be paired (toast fallback if the applet fails); sticks rescan and
+the frame/audio clocks reanchor on return. Detection is one byte read
+per frame.
 
 ZL/ZR are digital on Switch hardware and reported as full-scale trigger
 axes, which is what the shared L/R trigger bindings match. Assist
