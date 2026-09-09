@@ -8,7 +8,8 @@
  * path matches the devkitPro sdl2-simple/sdl2-demo examples exactly).
  * Only compiled on __SWITCH__; desktop builds keep desktop_present_sdl.c.
  *
- * Fixed 1280x720 window; the SNES frame is letterboxed through the
+ * Docked 1920x1080 / handheld 1280x720 window (decided at boot, rechecked
+ * while presenting); the SNES frame is letterboxed through the
  * logical-size scaler. Reconstruct upscaling is unavailable (no GLSL
  * compiler hooks here) and falls back to the sampler implied by
  * linear_filter, reported through Backend()/shader_error like desktop.
@@ -22,6 +23,8 @@
 
 #include <stdio.h>
 #include <string.h>
+
+#include <switch.h>
 
 enum {
   kSwitchWindowWidth = 1280,
@@ -87,9 +90,16 @@ bool Dkc2SdlPresenterInit(Dkc2SdlPresenter *presenter, int window_scale,
   presenter->upscaler =
       linear_filter ? kDkc2UpscalerBilinear : kDkc2UpscalerNearest;
 
-  SDL_Window *window = SDL_CreateWindow(DKC2_PRODUCT_TITLE, 0, 0,
-                                        kSwitchWindowWidth,
-                                        kSwitchWindowHeight, 0);
+  SDL_Window *window;
+  /* Docked = 1080p, handheld = 720p: the only two modes Switch SDL2
+   * exposes (SDL_SetWindowSize switches between them). */
+  int switch_w = 1280, switch_h = 720;
+  if (appletGetOperationMode() == AppletOperationMode_Console) {
+    switch_w = 1920;
+    switch_h = 1080;
+  }
+  window = SDL_CreateWindow(DKC2_PRODUCT_TITLE, 0, 0,
+                            switch_w, switch_h, 0);
   if (!window) {
     if (error && error_capacity)
       snprintf(error, error_capacity, "SDL_CreateWindow: %s",
@@ -137,6 +147,23 @@ bool Dkc2SdlPresenterPresent(Dkc2SdlPresenter *presenter,
   if (!presenter || !pixels) return false;
   SDL_Renderer *renderer = SwitchRenderer(presenter);
   if (!renderer) return false;
+  /* Dock/handheld transitions mid-session: resize to the matching
+   * mode (checked ~5x/sec; SDL_SetWindowSize switches the output). */
+  {
+    static unsigned s_tick;
+    if (++s_tick >= 12) {
+      int want_w = 1280, want_h = 720;
+      int cur_w = 0, cur_h = 0;
+      s_tick = 0;
+      if (appletGetOperationMode() == AppletOperationMode_Console) {
+        want_w = 1920;
+        want_h = 1080;
+      }
+      SDL_GetWindowSize(SwitchWindow(presenter), &cur_w, &cur_h);
+      if (cur_w != want_w || cur_h != want_h)
+        SDL_SetWindowSize(SwitchWindow(presenter), want_w, want_h);
+    }
+  }
   if (!SwitchEnsureTexture(presenter, source_width, source_height))
     return false;
   SDL_Texture *texture = SwitchTexture(presenter);
