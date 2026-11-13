@@ -1,60 +1,257 @@
-CC ?= cc
-CPPFLAGS ?= -Iinclude -Ithird_party/lakesnes_apu
-CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Wpedantic
-LDFLAGS ?=
+# Makefile.switch — Nintendo Switch (libnx) build for DKC2Recomp.
+#
+# Copy-free: this file lives in the game repo and includes the framework
+# fragment at snesrecomp/runner/switch.mk. Requires devkitA64 + switch
+# portlibs SDL2. No CMake, no recomp-ui, no launcher: the NRO boots
+# straight from sdmc:/switch/dkc2/rom.smc.
+#
+#   1. Generate private sources once (needs the USA v1.0 ROM):
+#        python scripts/generate_snesrecomp.py --rom <path>/dkc2.smc
+#   2. make -f Makefile.switch            # -> dkc2.nro + dkc2.nacp
+#   3. Copy dkc2.nro to sdmc:/switch/dkc2/ and place rom.smc beside it.
+#
+# Video is SDL2 + OpenGL ES2 (SDL_RENDERER_ACCELERATED); audio is the SDL2
+# queue over audren; input is raw SDL_Joystick (see runner/switch_gamepad.c
+# for the Switch button map). Desktop-only units (desktop_present_sdl.c,
+# desktop_overlay.cpp, desktop_main.c, macos_*) are excluded here.
 
-BUILD_DIR := build
-CORE_SOURCES := src/apu.c src/bus.c src/cpu.c src/decode.c src/execute.c src/hash.c src/hirom.c \
-	src/ppu_render.c src/rom.c src/snes_io.c src/symbols.c third_party/lakesnes_apu/apu.c \
-	third_party/lakesnes_apu/dsp.c third_party/lakesnes_apu/spc.c \
-	third_party/lakesnes_apu/statehandler.c
-CORE_OBJECTS := $(CORE_SOURCES:%.c=$(BUILD_DIR)/%.o)
-VERIFY := $(BUILD_DIR)/dkc2_verify
-ANALYZE := $(BUILD_DIR)/dkc2_analyze
-BOOT := $(BUILD_DIR)/dkc2_boot
-TESTS := $(BUILD_DIR)/test_apu $(BUILD_DIR)/test_bus $(BUILD_DIR)/test_cpu $(BUILD_DIR)/test_decode \
-	$(BUILD_DIR)/test_execute $(BUILD_DIR)/test_hash \
-	$(BUILD_DIR)/test_hirom $(BUILD_DIR)/test_ppu_render $(BUILD_DIR)/test_rom $(BUILD_DIR)/test_snes_io \
-	$(BUILD_DIR)/test_symbols $(BUILD_DIR)/test_timing
+.SUFFIXES:
 
-.PHONY: all clean test verify-rom
+# Keep `all` the default goal: helper file rules below must not hijack it.
+.DEFAULT_GOAL := all
 
-all: $(VERIFY) $(ANALYZE) $(BOOT)
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/devkitpro")
+endif
 
-$(VERIFY): $(BUILD_DIR)/app/verify_main.o $(CORE_OBJECTS)
-	$(CC) $(LDFLAGS) $^ -o $@
+TOPDIR ?= $(CURDIR)
+export TOPDIR
+include $(DEVKITPRO)/libounce/switch2_rules
 
-$(ANALYZE): $(BUILD_DIR)/app/analyze_main.o $(CORE_OBJECTS)
-	$(CC) $(LDFLAGS) $^ -o $@
+TARGET		:=	dkc2
+BUILD		:=	build-switch
+APP_TITLE	:=	Donkey Kong Country 2
+APP_AUTHOR	:=	elliotttate and Souldbminer
+APP_VERSION	:=	0.0.5
 
-$(BOOT): $(BUILD_DIR)/app/boot_main.o $(CORE_OBJECTS)
-	$(CC) $(LDFLAGS) $^ -o $@
+# SD layout: sdmc:/switch/<SWITCH_APP_DIR>/rom.smc (+config, saves).
+SWITCH_APP_DIR	?=	dkc2
 
-$(BUILD_DIR)/test_%: $(BUILD_DIR)/tests/test_%.o $(CORE_OBJECTS)
-	$(CC) $(LDFLAGS) $^ -o $@
+SNESRECOMP_ROOT	?=	$(TOPDIR)/snesrecomp
+export SNESRECOMP_ROOT
+include $(SNESRECOMP_ROOT)/runner/switch.mk
 
-$(BUILD_DIR)/%.o: %.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+# This pinned framework revision predates five newer runner units that
+# nothing in this game references; drop them instead of dirtying the
+# submodule. (Upstream switch.mk keeps them for current checkouts.)
+SNESRECOMP_SWITCH_CFILES := $(filter-out \
+	$(SNESRECOMP_SWITCH_ROOT)src/mod_audio.c \
+	$(SNESRECOMP_SWITCH_ROOT)src/host_mesh.c \
+	$(SNESRECOMP_SWITCH_ROOT)src/host_mesh_builder.c \
+	$(SNESRECOMP_SWITCH_ROOT)src/guarded_patch.c \
+	$(SNESRECOMP_SWITCH_ROOT)src/snes/sdd1.c \
+	$(SNESRECOMP_SWITCH_ROOT)src/desktop/mmx_config.c \
+	, $(SNESRECOMP_SWITCH_CFILES))
 
-test: $(TESTS)
-	@for test_program in $(TESTS); do \
-		$$test_program || exit $$?; \
-	done
+# Upstream runtime adaptations (cmake/runtime-patches/*.hunks: interpreter
+# hunk cut, PC-indexed quiescent ring, tier2 opt-in; ppu.hunks excluded --
+# it needs the Ppu.wsLineEnhancerWideLayers member from a newer framework
+# pin, which would break the struct layout for the rest of this pin):
+# fail-closed literal replacements applied to build-tree copies of the
+# pinned runner, compiled instead of the pristine TUs. Regenerates when the
+# hunks, either applier script, or the pinned sources change; the guard
+# script re-applies the Switch tier2_record cut on top.
+DKC2_PATCHED_DIR := $(TOPDIR)/patched-runtime
+DKC2_PATCHED_NAMES := apu.c audio_trace.c common_cpu_infra.c cpu_state.c \
+	dsp.c dsp_shadow.c interp_bridge.c tier2_capture.c
+DKC2_PATCHED_SRCS := $(addprefix $(DKC2_PATCHED_DIR)/,$(DKC2_PATCHED_NAMES))
+DKC2_PATCHED_ORIGS := \
+	$(addprefix $(SNESRECOMP_SWITCH_ROOT)src/,common_cpu_infra.c cpu_state.c audio_trace.c) \
+	$(addprefix $(SNESRECOMP_SWITCH_ROOT)src/snes/,apu.c dsp.c dsp_shadow.c tier2_capture.c interp_bridge.c)
 
-verify-rom: $(VERIFY)
-	@test -n "$(ROM)" || (echo 'Usage: make verify-rom ROM="/path/to/game.smc"' >&2; exit 64)
-	@$(VERIFY) "$(ROM)"
+DKC2_RUNTIME_PATCH_SCRIPT := $(wildcard $(TOPDIR)/scripts/apply_dkc3_runtime_patches.py $(TOPDIR)/scripts/apply_dkc2_runtime_patches.py)
+DKC2_SWITCH_GUARD_SCRIPT := $(wildcard $(TOPDIR)/scripts/apply_switch_runtime_guards.py)
 
-.PHONY: analyze-rom boot-rom
+$(DKC2_PATCHED_DIR)/manifest.txt: $(wildcard $(TOPDIR)/cmake/runtime-patches/*.hunks) \
+		$(DKC2_RUNTIME_PATCH_SCRIPT) $(DKC2_SWITCH_GUARD_SCRIPT) $(DKC2_PATCHED_ORIGS)
+ifneq ($(DKC2_RUNTIME_PATCH_SCRIPT),)
+	python3 $(firstword $(DKC2_RUNTIME_PATCH_SCRIPT)) --patches $(TOPDIR)/cmake/runtime-patches --snesrecomp $(SNESRECOMP_ROOT) --out $(DKC2_PATCHED_DIR)
+endif
+ifneq ($(DKC2_SWITCH_GUARD_SCRIPT),)
+	python3 $(DKC2_SWITCH_GUARD_SCRIPT) --patched $(DKC2_PATCHED_DIR)
+endif
+	@test -f $@ || (echo "Missing patched runtime manifest: $@ (provide runtime patch scripts or prebuilt patched-runtime/)" && exit 1)
 
-analyze-rom: $(ANALYZE)
-	@test -n "$(ROM)" || (echo 'Usage: make analyze-rom ROM="/path/to/game.smc"' >&2; exit 64)
-	@$(ANALYZE) "$(ROM)" 128
+$(DKC2_PATCHED_SRCS): $(DKC2_PATCHED_DIR)/manifest.txt
 
-boot-rom: $(BOOT)
-	@test -n "$(ROM)" || (echo 'Usage: make boot-rom ROM="/path/to/game.smc"' >&2; exit 64)
-	@$(BOOT) "$(ROM)"
+SNESRECOMP_SWITCH_CFILES := $(filter-out $(DKC2_PATCHED_ORIGS),$(SNESRECOMP_SWITCH_CFILES)) $(DKC2_PATCHED_SRCS)
+
+# Private generated recomp units (scripts/generate_snesrecomp.py --rom ...).
+DKC2_GEN_DIR		:=	$(TOPDIR)/generated/snesrecomp
+DKC2_GEN_SOURCES	:=	$(wildcard $(DKC2_GEN_DIR)/*.c)
+
+GAME_CFILES := \
+	$(DKC2_GEN_SOURCES) \
+	$(TOPDIR)/runner/dkc2_game.c \
+	$(TOPDIR)/runner/dkc2_video.c \
+	$(TOPDIR)/runner/dkc2_hdma.c \
+	$(TOPDIR)/runner/diagnostics_switch.c \
+	$(TOPDIR)/runner/headless_host.c \
+	$(TOPDIR)/runner/verified_rom.c \
+	$(TOPDIR)/runner/desktop_filter.c \
+	$(TOPDIR)/runner/desktop_fps.c \
+	$(TOPDIR)/runner/desktop_input.c \
+	$(TOPDIR)/runner/input_recording.c \
+	$(TOPDIR)/runner/desktop_launcher.c \
+	$(TOPDIR)/runner/desktop_overlay_model.c \
+	$(TOPDIR)/runner/desktop_vsync.c \
+	$(TOPDIR)/runner/desktop_rewind.c \
+	$(TOPDIR)/runner/desktop_viewport.c \
+	$(TOPDIR)/runner/desktop_pacer.c \
+	$(TOPDIR)/runner/desktop_audio_rate.c \
+	$(TOPDIR)/runner/sdl_main.c \
+	$(TOPDIR)/runner/switch_gamepad.c \
+	$(TOPDIR)/runner/desktop_present_switch.c \
+	$(TOPDIR)/runner/desktop_overlay_switch.c
+
+# Early dirs win bare-header resolution (notably runner/config.h over the
+# framework's desktop/config.h). The framework dirs must precede recomp-ui:
+# recomp-ui/src/common ships its own sha256.h/crc32.h that would otherwise
+# shadow the framework headers verified_rom.c builds against (desktop
+# CMake orders them the same way).
+GAME_INCLUDES_EARLY := \
+	$(TOPDIR)/runner \
+	$(TOPDIR)/recomp
+
+GAME_INCLUDES_LATE := \
+	$(TOPDIR)/recomp-ui/src \
+	$(TOPDIR)/recomp-ui/src/common
+
+GAME_DEFS := \
+	-DDKC2_RELEASE_VERSION='"0.0.5-switch"' \
+	-DSNESRECOMP_REVERSE_DEBUG=0 \
+	-DSNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS=1 \
+	-DSYSTEM_VOLUME_MIXER_AVAILABLE=0 \
+	-DSDL_MAIN_HANDLED \
+	-DDKC2_REAL_HOST_REPORT=1 \
+	-DSWITCH_APP_DIR='"$(SWITCH_APP_DIR)"'
+
+# Production forensics (see template): full diagnostic history costs a
+# 128 KiB WRAM hash + ring every frame, per-dispatch logging, and
+# CGRAM/VRAM scans + rings. Off, like a CMake production build.
+GAME_DEFS	+=	-DSNESRECOMP_FRAME_FINGERPRINTS=0 \
+			-DSNESRECOMP_DISPATCH_HISTORY=0 \
+			-DSNESRECOMP_PPU_DMA_HISTORY=0
+
+# Debug-only Switch extras: make -f Makefile.switch DEBUG=1
+# (L3 = quick-save to slot 0, R3 = quick-load). Off by default.
+ifdef DEBUG
+GAME_DEFS += -DSWITCH_DEBUG
+endif
+
+DATA		:=
+ROMFS		:=
+APP_ICON	:=	$(TOPDIR)/assets/switch/icon.jpg
+
+ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a78 -mtp=soft -fPIE
+
+CFILES		:=	$(GAME_CFILES) $(SNESRECOMP_SWITCH_CFILES)
+
+_BASENAMES	:=	$(notdir $(CFILES))
+ifneq ($(words $(_BASENAMES)),$(words $(sort $(_BASENAMES))))
+$(error "duplicate .c basenames across game + runner sources")
+endif
+
+INCLUDE		:=	$(foreach dir,$(GAME_INCLUDES_EARLY),-I$(dir)) \
+			$(foreach dir,$(SNESRECOMP_SWITCH_INCLUDES),-I$(dir)) \
+			$(foreach dir,$(GAME_INCLUDES_LATE),-I$(dir)) \
+			-I$(LIBNX)/include \
+			-I$(TOPDIR)/$(BUILD)
+
+DEFINES		:=	$(SNESRECOMP_SWITCH_DEFS) $(GAME_DEFS)
+
+CFLAGS		:=	-g -Wall -O2 -ffunction-sections \
+			$(ARCH) $(DEFINES) $(INCLUDE) `sdl2-config --cflags`
+
+CXXFLAGS	:=	$(CFLAGS) -fno-rtti -fno-exceptions
+
+ASFLAGS		:=	-g $(ARCH)
+LDFLAGS		=	-specs=$(DEVKITPRO)/libounce/switch.specs -g $(ARCH) \
+			-Wl,-Map,$(notdir $*.map)
+
+# GC sections so the never-called desktop launcher entry point
+# (Dkc2LauncherRun) and its recomp-ui references are dropped from the
+# link; the Switch build never runs the pre-boot UI.
+LDFLAGS		+=	-Wl,--gc-sections
+# Neutralize SDL2's Switch keyboard pump (no text input in these titles).
+LDFLAGS		+=	$(SNESRECOMP_SWITCH_WRAP)
+
+LIBS		:=	`sdl2-config --libs` -lm -lnx -lEGL
+
+LIBDIRS		:=	$(PORTLIBS) $(LIBNX)
+
+ifneq ($(BUILD),$(notdir $(CURDIR)))
+
+export OUTPUT	:=	$(TOPDIR)/$(TARGET)
+
+export VPATH	:=	$(sort $(dir $(CFILES)))
+
+export DEPSDIR	:=	$(TOPDIR)/$(BUILD)
+
+export OFILES_SRC	:=	$(notdir $(CFILES:.c=.o))
+export OFILES		:=	$(OFILES_SRC)
+export HFILES_BIN	:=
+
+# Link with CC (no C++ in the Switch build); games adding .cpp must
+# switch this to $(CXX) like the stock devkitPro template does.
+export LD	:=	$(CC)
+
+export INCLUDE	:=	$(INCLUDE)
+export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+
+ifeq ($(wildcard $(APP_ICON)),)
+export NROFLAGS += --icon=$(DEVKITPRO)/libounce/default_icon.jpg
+else
+export NROFLAGS += --icon=$(APP_ICON)
+endif
+export NROFLAGS += --nacp=$(TOPDIR)/$(TARGET).nacp
+
+ifneq ($(ROMFS),)
+export NROFLAGS += --romfsdir=$(TOPDIR)/$(ROMFS)
+endif
+
+.PHONY: $(BUILD) clean all
+
+all: $(BUILD)
+
+$(BUILD):
+	@[ -d $@ ] || mkdir -p $@
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(TOPDIR)/Makefile
 
 clean:
-	rm -rf $(BUILD_DIR)
+	@echo clean ...
+	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+
+else
+
+.PHONY:	all
+
+DEPENDS	:=	$(OFILES:.o=.d)
+
+all	:	$(OUTPUT).nro
+
+$(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
+
+# Explicit link through a response file: generated recomp trees put
+# hundreds of objects on the link line, past Windows' CreateProcess
+# limit ("Argument list too long"). This overrides switch_rules' %.elf
+# pattern rule with the same recipe shape.
+$(OUTPUT).elf	:	$(OFILES)
+	@echo linking $(notdir $@)
+	$(file >$(DEPSDIR)/objects.rsp,$(OFILES))
+	@$(LD) $(LDFLAGS) @$(DEPSDIR)/objects.rsp $(OVERLAY_LIBPATHS) $(LIBPATHS) $(LIBS) -o $@
+	@$(NM) -CSn $@ > $(OUTPUT).lst
+
+-include $(DEPENDS)
+
+endif

@@ -58,3 +58,13 @@ tier2_coverage.json
 # alongside the legacy fixed name.
 tier2_*.json
 tier2_*.jsonl
+
+# Switch build: adapted runtime copies (Makefile.switch regenerates these
+# from cmake/runtime-patches via scripts/apply_dkc3_runtime_patches.py).
+patched-runtime/
+
+*.elf
+*.nro
+*.nacp
+*.lst
+dkc2.zip
