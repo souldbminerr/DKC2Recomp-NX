@@ -10,5 +10,8 @@
     "requiredDeletion": [],
     "userDeletion": [
         "sdmc:/switch/dkc2/"
-    ]
+    ],
+    "dependencies": { 
+        "sdl3": "3.4.x.x" 
+    }
 }
