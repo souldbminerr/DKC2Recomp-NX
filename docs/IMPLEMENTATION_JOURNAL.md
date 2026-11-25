@@ -5498,3 +5498,28 @@ reports `drako3d` through the normal Video line. Also fixed a
 dangling-else warning the SDL3 pause/resume split introduced
 (the pre-existing desktop-only `test_load_state_done` unused warning is
 untouched).
+
+## 2026-11-25: snesrecomp widescreen merge completed, Switch build green
+
+The pending `upstream/dkc2-widescreen-presentation-v0.0.4` merge into the
+`snesrecomp-NX` fork was blocking `make build-switch`: the game calls six
+APIs the old fork tip lacked (`WsShadowSetEntryAlias`,
+`WsShadowClearEntryAlias`, `WsShadowSetNativeViewportInset`,
+`WsShadowVramPageWriteFrame`, `PpuSetWidescreenLayerRawBand`,
+`PpuSetWidescreenLayerRepeatAutoPeriod`). Resolution: `ppu.c`/`ppu.h` take
+the branch's widescreen serving plus the fork's sprite-budget/OAM-snapshot
+extras; `ws_shadow.c`/`ws_shadow.h` take the branch wholesale (the fork's
+scene-local cache machinery is superseded and its only consumer, the
+ignored scene-local scratch test, is left unbuilt); `decoder.py` takes the
+branch null-slot fix. Test shims updated for the 6-arg `WsShadowTile` plus
+`NativeLeft/Right`/`PresentWorldX` and the two frame-counter globals.
+
+Checked: `ppu_sprite_limit_test` PASS, `ppu_composition_regression_test`
+PASS, `ws_shadow.c` compiles standalone, `make build-switch` links
+`dkc2.nro` (exit 0). Two follow-on Switch-only fixes were needed to get
+there, both game-side: `apply_switch_runtime_guards.py` is now idempotent
+(the fork already carries both tier2 cuts, so a pre-guarded
+`patched-runtime` succeeds instead of refusing), and `sdd1.c` is linked
+again (the merge's `cart.c`/`dma.c` require it; DKC2 is an S-DD1 title).
+No hardware run yet -- device validation (audio, gamepad, screenshots,
+first pixels) is still unverified and awaiting a Switch run.

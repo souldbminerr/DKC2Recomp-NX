@@ -71,15 +71,17 @@ SNESRECOMP_ROOT	?=	$(TOPDIR)/snesrecomp
 export SNESRECOMP_ROOT
 include $(SNESRECOMP_ROOT)/runner/switch.mk
 
-# This pinned framework revision predates five newer runner units that
+# This pinned framework revision predates four newer runner units that
 # nothing in this game references; drop them instead of dirtying the
 # submodule. (Upstream switch.mk keeps them for current checkouts.)
+# sdd1.c was historically in this list, but the widescreen merge brought in
+# cart.c/dma.c/snes.c call sites that require it (DKC2 is an S-DD1 title),
+# so it must stay linked.
 SNESRECOMP_SWITCH_CFILES := $(filter-out \
 	$(SNESRECOMP_SWITCH_ROOT)src/mod_audio.c \
 	$(SNESRECOMP_SWITCH_ROOT)src/host_mesh.c \
 	$(SNESRECOMP_SWITCH_ROOT)src/host_mesh_builder.c \
 	$(SNESRECOMP_SWITCH_ROOT)src/guarded_patch.c \
-	$(SNESRECOMP_SWITCH_ROOT)src/snes/sdd1.c \
 	$(SNESRECOMP_SWITCH_ROOT)src/desktop/mmx_config.c \
 	, $(SNESRECOMP_SWITCH_CFILES))
 
