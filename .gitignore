@@ -39,7 +39,6 @@ __pycache__/
 
 *.ppm
 *.bmp
-*.png
 *.wav
 *.pcm
 *.oam
