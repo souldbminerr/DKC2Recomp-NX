@@ -3,7 +3,7 @@
     "author": "Souldbminer, elliottate",
     "version": "0.0.5.0",
     "description": "A recompiled and enhanced version of DKC2",
-    "details": "Donkey Kong Country 2: Diddy's Kong Quest is a 1995 platform game developed by Rare and published by Nintendo for the Super Nintendo Entertainment System. This recompilation adds some enhancements upon the game, primarily support for Widescreen.",
+    "details": "Donkey Kong Country 2: Diddy's Kong Quest is a 1995 platform game developed by Rare and published by Nintendo for the Super Nintendo Entertainment System. This recompilation adds some enhancements upon the game, primarily support for Widescreen. This recompilation requires a copy of your own game placed in sdmc:/switch/dkc2/rom.sfc",
     "license": "MIT",
     "changelog": "0.0.5.0: Initial release for Ounce (HPAK).",
     "date": "25/11/2026 12:00",
