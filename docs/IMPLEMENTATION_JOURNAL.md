@@ -5370,3 +5370,131 @@ had neither. `scripts/analyze_pacing_log.py` reads the log and estimates
 the refreshes each frame was shown for, which is the number that answers
 the owner's report; it lives in the repository with a test so the next
 pacing question starts from the same instrument.
+
+## Switch SDL3 backend (opt-in, unverified on hardware)
+
+The Switch host can now build against portlibs SDL 3.4.0 instead of SDL
+2.28.x with `make DKC2_SWITCH_SDL=3` (default stays 2). The framework
+already abstracted SDL2/3 (`sdl_compat.h`, `SNESRECOMP_SDL3`), but the four
+game-owned Switch files called removed SDL2 APIs directly. The Makefile
+appends `-DSNESRECOMP_SDL3=1` after the framework pin's `=0` so the later
+define wins without touching the submodule.
+
+SDL3 is shared-only in the Switch 2 prefix (`libSDL3.so.0`, with
+`libounce.so.1`, `libouncevk-gl.so.1`, `libstdc++.so.6` behind it, all with
+NROs), so `DKC2_SWITCH_SDL=3` requires `DKC2_SWITCH_DYNAMIC=1` and fails
+loudly otherwise. Flags come from the switch2 `pkg-config sdl3` with
+`OUNCE_SHARED=1` (`-I.../switch2/include`,
+`-L.../switch2/lib/shared -lSDL3 ...`). A minimal link test with that exact
+flag set yields `NEEDED libSDL3.so.0, libounce.so.1, libouncevk-gl.so.1,
+libstdc++.so.6`, so deployment is those five NROs (plus transitive
+`libouncevk.so.1`) next to the program.
+
+Porting notes, all behind `#if SNESRECOMP_SDL3`:
+
+- Audio is the real change: SDL3 removed the device queue
+  (`SDL_QueueAudio`/`SDL_GetQueuedAudioSize`/`SDL_ClearQueuedAudio` and the
+  `samples` field). The host now opens the default playback device,
+  verifies it with `SDL_GetAudioDeviceFormat`, and pushes frames through a
+  bound `SDL_AudioStream` in the cartridge native format; queued frames
+  come from `SDL_GetAudioStreamQueued` (bytes) and pause splits into
+  `SDL_PauseAudioDevice`/`SDL_ResumeAudioDevice`.
+- Enumeration is by instance ID: `SDL_GetJoysticks` plus
+  `SDL_OpenGamepad`/`SDL_OpenJoystick` instead of device indices
+  (`SDL_NumJoysticks` and `SDL_JoystickGetDeviceInstanceID` are gone).
+- `event.key.keysym.scancode` is now `event.key.scancode`;
+  `SDL_GetKeyboardState` returns `const bool *` (via the compat helper).
+- Renderer: `SDL_CreateWindow` lost its x/y, `SDL_CreateRenderer` takes a
+  name (`NULL` for accelerated, `"software"` fallback) with vsync via
+  `SDL_SetRenderVSync`, `SDL_RenderCopy` became `SDL_RenderTexture`,
+  `SDL_UpdateTexture` returns bool, logical size disables via
+  `SDL_LOGICAL_PRESENTATION_DISABLED`, and screenshots convert the
+  `SDL_RenderReadPixels` surface to RGB24 with `SDL_ConvertPixels`.
+- SDL3 removed `SDL_HINT_RENDER_SCALE_QUALITY` and `SDL_INIT_TIMER`; scale
+  mode is per-texture (`SDL_SetTextureScaleMode`) and timer init is dropped.
+
+SDL2/SDL3 event, button, and scancode constants come from
+`SDL_ENABLE_OLD_NAMES`, so no mapping-table changes were needed.
+`SDL_SetMainReady`, `SDL_Quit`, performance counters, and `SDL_Delay` are
+unchanged. `switch_gamepad.c` gained a direct `#include <stdio.h>` that
+SDL2's headers had been providing transitively.
+
+Verification so far is compile-level only: all four touched files pass
+`aarch64-none-elf-gcc -fsyntax-only` in both modes (8/8). No hardware run
+yet, so the SDL3 path is explicitly unverified: audio pacing, gamepad
+mapping, dock/handheld resize, and screenshot readback still need a device
+pass before it can become the default.
+
+## Switch SDL3 first device run: silent audio, black screen
+
+First log showed `warning: SDL audio unavailable; continuing silent` and no
+picture; the `MESA`/`NVK`/`ZCULL` lines are Nouveau driver info (Z-buffer
+compression setup, shader cache), not errors. Two changes from that log:
+
+- Audio was almost certainly the strict format check: the host demanded
+  exactly 32040 Hz/S16/stereo and quit on anything else, while Switch
+  hardware runs 48 kHz. SDL3 streams convert for free, so the check now
+  accepts the device format (`SDL_GetAudioDeviceFormat`) and only fails
+  when the query itself fails. Queued-byte accounting needed no change:
+  the stream docs confirm `SDL_GetAudioStreamQueued` reports input-side
+  bytes. Every audio failure path now logs `SDL_GetError()`, plus a
+  `[SwitchAudio]` line with the device format on success.
+- Video: the presenter logged nothing, so init now enumerates render
+  drivers (`[SwitchVideo] render driver N: ...`), prefers the first
+  non-`software` driver explicitly (software has no visible Switch
+  surface), and logs the chosen renderer, window, and output sizes plus
+  one-shot errors for texture upload and `RenderTexture` failures. A black
+  screen with those logs will name the failing stage instead of guessing.
+
+  Follow-up: the red clear presented but the opaque-white textured quad
+  through the same path stayed black, isolating the draw call from the
+  swapchain. Prime suspect is the per-frame logical-presentation reset: a
+  fresh renderer already has no logical size, so the call is a semantic
+  no-op everywhere else -- but if it zeroes the viewport on the Switch
+  driver, clears still fill while textured draws vanish, which matches
+  every observation. Removed (both SDL2 and SDL3 branches were dead
+  calls), with a comment guarding against re-adding it. The TEMP white
+  test confirms.
+
+## Switch presenter rewritten on drako3d
+
+The SDL renderer path never displayed textured frames, so the Switch
+presenter now drives the GPU directly with drako3d (same API as deko3d,
+only the include differs); SDL stays for audio, input, and events, with
+no SDL window, and the default NWindow feeds the swapchain. Zero-copy
+frame path: the emulator renders straight into pitch-linear texture
+memory handed out per frame, the GPU samples it directly, and the BGRX to
+RGB swizzle happens in the image view -- no memcpy, no transfer. A
+non-Raw screen filter falls back to a staging upload. Shaders
+(fullscreen triangle, texture sample) compile at build time with uam2
+into the NRO romfs. Present fully owns acquire/submit/present per frame;
+resize recreates the swapchain, texture re-inits on source-size change.
+
+Correction after the first device run: the `romfsInit failed` log was not
+a missing romfs -- the NRO embedded it correctly. libounce's romfsInit
+returns a Result (0 is success) and the init check was inverted
+(`!romfsInit()` fires on success). Now checked with R_FAILED, with the
+code in the log line.
+
+Crash after exactly 3 presents isolated the fault: MesenCE's Switch
+renderer (same drako3d API) was the reference that cracked it. Raw
+DkImageView / DkSampler structs were bound as descriptor sets, but the
+hardware needs DkImageDescriptor / DkSamplerDescriptor built by
+dkImageDescriptorInitialize / dkSamplerDescriptorInitialize and uploaded
+with dkCmdBufPushData -- garbage descriptors fault the GPU channel, and
+the kill lands asynchronously in a later acquire. The vertex path now
+also mirrors MesenCE (real VBO + attrib/buffer state + texture handle
+0,0) instead of an attribute-less gl_VertexID triangle, and BeginFrame
+opens with dkQueueWaitIdle exactly like MesenCE's per-frame idle, making
+command-buffer/texture ping-pong reuse airtight. Zero-copy direct
+rendering and the GPU view swizzle are unchanged -- that half was never
+the bug.
+
+With the first picture up, all bring-up logging came back out: the
+per-frame begin/present/submit/presented breadcrumbs, the
+`[SwitchVideo] drako3d ...` init line, and the `[SwitchAudio] device ...`
+line. Failure paths still log SDL/drako errors, and the backend still
+reports `drako3d` through the normal Video line. Also fixed a
+dangling-else warning the SDL3 pause/resume split introduced
+(the pre-existing desktop-only `test_load_state_done` unused warning is
+untouched).

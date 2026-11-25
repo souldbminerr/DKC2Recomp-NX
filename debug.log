@@ -1,0 +1,18 @@
+[Switch] file logging: debug.log (dkc2)
+[Switch] ROM: dkc2/rom.sfc
+[saves] read saves/save.srm (2048 bytes, hash=909cf90b)
+[SwitchVideo] drako3d 1920x1080, texture 342x224 pitch 1536
+[SwitchPad] opened #0: Switch Controller
+[SwitchPad] opened #1: Switch Controller
+[SwitchAudio] device freq=44100 format=0x8010 channels=2 frames=1024
+[SwitchVideo] begin-enter
+[SwitchVideo] begin slot=0 direct=1
+[SwitchVideo] present slot=0 direct=1 342x224
+[SwitchVideo] submitted
+[SwitchVideo] presented
+[SwitchVideo] begin-enter
+[SwitchVideo] begin slot=1 direct=1
+[SwitchVideo] present slot=1 direct=1 342x224
+[SwitchVideo] submitted
+[SwitchVideo] presented
+[SwitchVideo] begin-enter

@@ -305,6 +305,17 @@ static bool EnvironmentEnabled(const char *name) {
   return value && *value && *value != '0';
 }
 
+bool Dkc2SdlPresenterBeginFrame(Dkc2SdlPresenter *presenter, bool direct,
+                                uint8_t **pixels, size_t *pitch) {
+  (void)presenter;
+  (void)direct;
+  (void)pixels;
+  (void)pitch;
+  /* Raw OpenGL backend: no CPU-mapped texture memory. The caller keeps
+   * rendering into its own buffer. */
+  return false;
+}
+
 bool Dkc2SdlPresenterInit(Dkc2SdlPresenter *presenter, int window_scale,
                           int fullscreen, bool hidden, bool linear_filter,
                           int source_width, int source_height,

@@ -3,10 +3,17 @@
 #include "dkc2_video.h"
 #include "launcher_profile.h"
 
-#include <SDL.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#if SNESRECOMP_SDL3
+/* Only scancode/button constants are used here; the old-names aliases
+ * keep them source-compatible. */
+#include "desktop/sdl_compat.h"
+#else
+#include <SDL.h>
+#endif
 
 #ifndef DKC2_RELEASE_VERSION
 #define DKC2_RELEASE_VERSION "dev"
