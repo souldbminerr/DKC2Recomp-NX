@@ -268,7 +268,16 @@ DKC2_SWITCH_CONFIG	:=	SDL=$(DKC2_SWITCH_SDL) DYNAMIC=$(DKC2_SWITCH_DYNAMIC) DEBU
 DKC2_FLAG_SENSITIVE	:=	sdl_main.o switch_gamepad.o desktop_present_switch.o desktop_launcher.o
 DKC2_CONFIG_STAMP	:=	$(TOPDIR)/$(BUILD)/switch-config.stamp
 
-$(DKC2_CONFIG_STAMP):
+# The stamp has no source prerequisites, so without FORCE make would
+# consider the existing file up to date forever and never refresh it:
+# flag flips would then relink stale objects (e.g. SDL2-compiled TUs
+# against the SDL3 shared libs). FORCE re-runs the recipe every time;
+# the file itself is only rewritten when the combo actually changed, so
+# rebuilds stay minimal.
+.PHONY: FORCE
+FORCE:
+
+$(DKC2_CONFIG_STAMP): FORCE
 	@[ -d $(@D) ] || mkdir -p $(@D)
 	@echo '$(DKC2_SWITCH_CONFIG)' | cmp -s - $@ 2>/dev/null || echo '$(DKC2_SWITCH_CONFIG)' > $@
 
